@@ -1,0 +1,1 @@
+python3 ./tools/train.py ./configs/deformable_detr/deformable_detr_r50_16x2_50e_coco.py  --work-dir './work_dirs/detr' --no-validate

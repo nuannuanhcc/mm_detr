@@ -79,8 +79,9 @@ class SingleStageDetector(BaseDetector):
         """
         super(SingleStageDetector, self).forward_train(img, img_metas)
         x = self.extract_feat(img)
+        cls_labels = [i[:, 0] for i in gt_labels] if self.train_cfg.with_reid else gt_labels
         losses = self.bbox_head.forward_train(x, img_metas, gt_bboxes,
-                                              gt_labels, gt_bboxes_ignore)
+                                              cls_labels, gt_bboxes_ignore)
         return losses
 
     def simple_test(self, img, img_metas, rescale=False):

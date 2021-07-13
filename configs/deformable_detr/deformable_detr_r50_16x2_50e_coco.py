@@ -1,6 +1,14 @@
 _base_ = [
     '../_base_/datasets/coco_detection.py', '../_base_/default_runtime.py'
 ]
+dataset_type = 'SysuDataset'
+data_root = 'data/sysu/'
+# dataset_type = 'PrwDataset'
+# data_root = 'data/prw/'
+img_size = (1333, 800)  # (1333, 800), (1500, 900)
+batch_size = 3
+with_reid = True
+
 model = dict(
     type='DeformableDETR',
     backbone=dict(
@@ -24,7 +32,7 @@ model = dict(
     bbox_head=dict(
         type='DeformableDETRHead',
         num_query=300,
-        num_classes=80,
+        num_classes=1,
         in_channels=2048,
         sync_cls_avg_factor=True,
         as_two_stage=False,
@@ -75,12 +83,13 @@ model = dict(
         loss_iou=dict(type='GIoULoss', loss_weight=2.0)),
     # training and testing settings
     train_cfg=dict(
+        with_reid=with_reid,
         assigner=dict(
             type='HungarianAssigner',
             cls_cost=dict(type='FocalLossCost', weight=2.0),
             reg_cost=dict(type='BBoxL1Cost', weight=5.0, box_format='xywh'),
             iou_cost=dict(type='IoUCost', iou_mode='giou', weight=2.0))),
-    test_cfg=dict(max_per_img=100))
+    test_cfg=dict(with_reid=with_reid, max_per_img=100))
 img_norm_cfg = dict(
     mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_rgb=True)
 # train_pipeline, NOTE the img_scale and the Pad's size_divisor is different
@@ -134,11 +143,27 @@ train_pipeline = [
 # test_pipeline, NOTE the Pad's size_divisor is different from the default
 # setting (size_divisor=32). While there is little effect on the performance
 # whether we use the default setting or use size_divisor=1.
+query_pipeline = [
+    dict(type='LoadImageFromFile'),
+    dict(type='LoadAnnotations', with_bbox=True),
+    dict(
+        type='MultiScaleFlipAug',
+        img_scale=img_size,
+        flip=False,
+        transforms=[
+            dict(type='Resize', keep_ratio=True),
+            dict(type='RandomFlip'),
+            dict(type='Normalize', **img_norm_cfg),
+            dict(type='Pad', size_divisor=1),
+            dict(type='ImageToTensor', keys=['img']),
+            dict(type='Collect', keys=['img', 'gt_bboxes']),
+        ])
+]
 test_pipeline = [
     dict(type='LoadImageFromFile'),
     dict(
         type='MultiScaleFlipAug',
-        img_scale=(1333, 800),
+        img_scale=img_size,
         flip=False,
         transforms=[
             dict(type='Resize', keep_ratio=True),
@@ -150,11 +175,33 @@ test_pipeline = [
         ])
 ]
 data = dict(
-    samples_per_gpu=2,
-    workers_per_gpu=2,
+    samples_per_gpu=batch_size,
+    workers_per_gpu=batch_size,
     train=dict(filter_empty_gt=False, pipeline=train_pipeline),
-    val=dict(pipeline=test_pipeline),
+    query=dict(pipeline=query_pipeline),
     test=dict(pipeline=test_pipeline))
+data = dict(
+    samples_per_gpu=batch_size,
+    workers_per_gpu=batch_size,
+    train=dict(
+        with_reid=with_reid,
+        type=dataset_type,
+        ann_file=data_root + 'annotations/train.json',
+        img_prefix=data_root + 'images/',
+        filter_empty_gt=False,
+        pipeline=train_pipeline),
+    query=dict(
+        with_reid=with_reid,
+        type=dataset_type,
+        ann_file=data_root + 'annotations/query.json',
+        img_prefix=data_root + 'images/',
+        pipeline=query_pipeline,
+        is_query=True),
+    test=dict(
+        type=dataset_type,
+        ann_file=data_root + 'annotations/test.json',
+        img_prefix=data_root + 'images/',
+        pipeline=test_pipeline))
 # optimizer
 optimizer = dict(
     type='AdamW',
