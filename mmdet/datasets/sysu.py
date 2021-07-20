@@ -18,12 +18,12 @@ class SysuDataset(CocoDataset):
 
     def evaluate(self, predictions, dataset):
         if self.with_reid:
-            result = self.evaluate_reid(predictions, dataset)
+            result = self.evaluate_search(predictions, dataset)
         else:
             result = self.evaluate_detection(predictions)
         return result
 
-    def evaluate_reid(self, predictions, dataset, gallery_size=100):
+    def evaluate_search(self, predictions, dataset, gallery_size=100):
         dataset_test, dataset_query = dataset
         predictions_test, predictions_query = predictions
         query_img_list = [img['file_name'] for img in dataset_query.data_infos]
@@ -46,7 +46,7 @@ class SysuDataset(CocoDataset):
             gt_boxlist = dataset_test.get_ann_info(image_id)['bboxes']
             gt_boxlists.append(gt_boxlist)
 
-        result = self.eval_reid_sysu(
+        result = self.eval_reid(
             pred_feats=pred_feats,
             query_feats=query_feats,
             test_img_list=test_img_list,
@@ -60,27 +60,23 @@ class SysuDataset(CocoDataset):
         )
 
         topk = [1, 3, 5, 10]
-        result_str = "\n##################################################\n"
-        result_str += '###   gallery_size = {}   ##################'.format(gallery_size)
-        result_str += '\nmodel: {}\n'.format(result['model'])
-        result_str += "Detection_Recall: {:.4f}\n".format(result["Detection_Recall"])
-        result_str += "Detection_Precision: {:.4f}\n".format(result["Detection_Precision"])
-        result_str += "Detection_mean_Avg_Precision: {:.4f}\n".format(result["Detection_mean_Avg_Precision"])
-        result_str += "ReID_Recall: {:.4f}  ".format(result["ReID_Recall"])
-        result_str += "(ReID_Recall_Ideal: {:.4f})\n".format(result["ReID_Recall_Ideal"])
-        result_str += "ReID_mean_Avg_Precision: {:.4f}  ".format(result["ReID_mean_Avg_Precision"])
-        result_str += "(ReID_mean_Avg_Precision_Ideal: {:.4f})\n".format(result["ReID_mean_Avg_Precision_Ideal"])
+        result_str = "\n###########################################\n"
+        result_str += '##########  gallery_size = {}   ##########\n'.format(gallery_size)
+        result_str += "Detection_Recall: {:.2%}\n".format(result["Detection_Recall"])
+        result_str += "Detection_Precision: {:.2%}\n".format(result["Detection_Precision"])
+        result_str += "Detection_mean_Avg_Precision: {:.2%}\n".format(result["Detection_mean_Avg_Precision"])
+        result_str += "ReID_Recall: {:.2%} \n".format(result["ReID_Recall"])
+        result_str += "ReID_mean_Avg_Precision: {:.2%} \n".format(result["ReID_mean_Avg_Precision"])
         for i, k in enumerate(topk):
-            result_str += '  Top-{:2d} = {:.2%} (The ideal top-{:2d} = {:.2%})\n'.format(k, result["CMC"][i], k,
-                                                                                         result["CMC_Ideal"][i])
-        result_str += "##################################################\n"
+            result_str += '  Top-{:2d} = {:.2%} \n'.format(k, result["CMC"][i])
+        result_str += "############################################\n"
         print(result_str)
         return result_str
 
     def evaluate_detection(self, predictions, iou_thr=0.5):
         pred_boxlists = []
         gt_boxlists = []
-        for image_id, prediction in enumerate(predictions[0]):
+        for image_id, prediction in enumerate(predictions):
             prediction = prediction[0]  #  TODO n_box * 5
             gt_boxlist = self.get_ann_info(image_id)['bboxes']
             if len(prediction) == 0:
@@ -88,7 +84,7 @@ class SysuDataset(CocoDataset):
             pred_boxlists.append(prediction)
             gt_boxlists.append(gt_boxlist)
 
-        result = self.eval_detection_sysu(
+        result = self.eval_detect(
             pred_boxlists=pred_boxlists,
             gt_boxlists=gt_boxlists,
             iou_thresh=iou_thr,
@@ -106,7 +102,55 @@ class SysuDataset(CocoDataset):
         print(result_str)
         return result_str
 
-    def eval_detection_sysu(self, pred_boxlists, gt_boxlists, iou_thresh=0.5, use_07_metric=False):
+    def eval_reid(self, pred_feats, query_feats, test_img_list, query_img_list, query_boxlists, pred_boxlists,
+                  gt_boxlists, iou_thresh=0.5,
+                  use_07_metric=False, gallery_size=100):
+        """Evaluate on voc dataset.
+        Args:
+            pred_boxlists(list[BoxList]): pred boxlist, has labels and scores fields.
+            gt_boxlists(list[BoxList]): ground truth boxlist, has labels field.
+            iou_thresh: iou thresh
+            use_07_metric: boolean
+        Returns:
+            dict represents the results
+        """
+        # assert len(test_img_list) == 6978, "Length of test_img lists need to be 6978, but it is {}.".format(len(test_img_list))
+        assert len(query_img_list) == 2900, "Length of query_img lists need to be 2900, but it is {}.".format(
+            len(query_img_list))
+        assert len(query_boxlists) == 2900, "Length of query_boxlists lists need to be 2900, but it is {}.".format(
+            len(query_boxlists))
+        assert len(gt_boxlists) == len(pred_boxlists), "Length of gt and pred lists need to be same."
+
+        result = {}
+        result.update({'model': 'model_0'})
+
+        prec, rec = self.calc_detection_prec_rec(pred_boxlists=pred_boxlists, gt_boxlists=gt_boxlists,
+                                                 iou_thresh=iou_thresh)
+        Detection_Precision = np.nanmean(prec[1])
+        Detection_Recall = np.nanmean(rec[1])
+        result.update({'Detection_Precision': Detection_Precision})
+        result.update({'Detection_Recall': Detection_Recall})
+        ap = self.calc_detection_ap(prec, rec, use_07_metric=use_07_metric)
+        Detection_mean_Avg_Precision = np.nanmean(ap)
+        result.update({'Detection_mean_Avg_Precision': Detection_mean_Avg_Precision})
+
+        ##################  Re-ID   ###################
+        topk = [1, 3, 5, 10]
+        rec, aps, accs = self.calc_reid_topk(pred_feats, query_feats, test_img_list, query_img_list, query_boxlists,
+                                             pred_boxlists,
+                                             gt_boxlists, topk, det_thresh=0.5, iou_thresh=0.5,
+                                             gallery_size=gallery_size)
+
+        ReID_Recall = np.nanmean(rec)
+        ReID_mean_Avg_Precision = np.nanmean(aps)
+        result.update({'ReID_Recall': ReID_Recall})
+        result.update({'ReID_mean_Avg_Precision': ReID_mean_Avg_Precision})
+        accs = np.mean(accs, axis=0)
+        result.update({'CMC': accs})
+        return result
+
+
+    def eval_detect(self, pred_boxlists, gt_boxlists, iou_thresh=0.5, use_07_metric=False):
         """Evaluate on voc dataset.
         Args:
             pred_boxlists(list[BoxList]): pred boxlist, has labels and scores fields.
@@ -119,13 +163,164 @@ class SysuDataset(CocoDataset):
         assert len(gt_boxlists) == len(
             pred_boxlists
         ), "Length of gt and pred lists need to be same."
-        prec, rec = self.calc_detection_sysu_prec_rec(
+        prec, rec = self.calc_detection_prec_rec(
             pred_boxlists=pred_boxlists, gt_boxlists=gt_boxlists, iou_thresh=iou_thresh
         )
-        ap = self.calc_detection_sysu_ap(prec, rec, use_07_metric=use_07_metric)
+        ap = self.calc_detection_ap(prec, rec, use_07_metric=use_07_metric)
         return {"ap": ap, "map": np.nanmean(ap)}
 
-    def calc_detection_sysu_prec_rec(self, gt_boxlists, pred_boxlists, iou_thresh=0.5):
+
+    def calc_reid_topk(self, pred_feats, query_feats, test_img_list, query_img_list, query_boxlists, pred_boxlists, gt_boxlists, topk,
+                            det_thresh=0.5, iou_thresh=0.5, gallery_size=100):
+
+        # assert len(test_img_list) == 6978, "Length of test_img lists need to be 6978, but it is {}.".format(len(test_img_list))
+        assert len(query_img_list) == 2900, "Length of query_img lists need to be 2900, but it is {}.".format(
+            len(query_img_list))
+        assert len(query_boxlists) == 2900, "Length of query_boxlists lists need to be 2900, but it is {}.".format(
+            len(query_boxlists))
+        assert len(gt_boxlists) == len(pred_boxlists), "Length of gt and pred lists need to be same."
+        assert isinstance(topk, (list, tuple)), "topk must be a list or tuple !"
+
+        ######################### path ##########################
+        annotation_dir = './data/sysu/SIPN_annotation/'
+
+        test_all_file = 'testAllDF.csv'
+        query_file = 'queryDF.csv'
+        q_to_g_file = 'q_to_g' + str(gallery_size) + 'DF.csv'
+
+        test_all = pd.read_csv(osp.join(annotation_dir, test_all_file))
+        query_boxes = pd.read_csv(osp.join(annotation_dir, query_file))
+        queries_to_galleries = pd.read_csv(osp.join(annotation_dir, q_to_g_file))
+
+        test_all, query_boxes = delta_to_coordinates(test_all, query_boxes)
+        ######################## initial ##########################
+        test_imnames = test_img_list
+        query_imnames = query_img_list
+        gallery_det = pred_boxlists
+        gallery_feat = pred_feats
+        probe_feat = [p_f.squeeze() for p_f in query_feats]
+
+        use_full_set = gallery_size == -1
+        df = test_all.copy()
+
+        # ====================formal===================
+        name_to_det_feat = {}
+        for name, det, feat in zip(test_imnames, gallery_det, gallery_feat):
+            scores = det[:, 4].ravel()
+            inds = np.where(scores >= det_thresh)[0]
+            if len(inds) > 0:
+                name_to_det_feat[name] = (det[inds], feat[inds])
+
+        # # =====================debug=================
+        # f = open('name_to_det_feat.pkl', 'rb+')
+        # name_to_det_feat = pickle.load(f)
+        # # ======================end==================
+
+        rec = []
+        aps = []
+        accs = []
+        topk = topk
+        # ret  # TODO: save json
+        for i in range(len(probe_feat)):
+            pid = query_boxes.loc[i, 'pid']
+            num_g = query_boxes.loc[i, 'num_g']
+            y_true, y_score = [], []
+            imgs, rois = [], []
+            count_gt, count_tp = 0, 0
+            # Get L2-normalized feature vector
+            feat_p = probe_feat[i].ravel()
+            # Ignore the probe image
+            start = time.time()
+            probe_imname = queries_to_galleries.iloc[i, 0]
+            probe_gt = []
+            tested = set([probe_imname])
+            # 1. Go through the gallery samples defined by the protocol
+            for g_i in range(1, gallery_size + 1):
+
+                gallery_imname = queries_to_galleries.iloc[i, g_i]
+                if g_i <= num_g:
+                    gt = df.query('imname==@gallery_imname and pid==@pid')
+                    gt = gt.loc[:, 'x1': 'y2'].values.ravel()
+                else:
+                    gt = np.array([])
+                count_gt += (gt.size > 0)
+                # compute distance between probe and gallery dets
+                if gallery_imname not in name_to_det_feat: continue
+
+                det, feat_g = name_to_det_feat[gallery_imname]
+                # get L2-normalized feature matrix NxD
+                assert feat_g.size == np.prod(feat_g.shape[:2])
+                feat_g = feat_g.reshape(feat_g.shape[:2])
+                # compute cosine similarities
+                sim = feat_g.dot(feat_p).ravel()
+                # assign label for each det
+                label = np.zeros(len(sim), dtype=np.int32)
+                if gt.size > 0:
+                    w, h = gt[2] - gt[0], gt[3] - gt[1]
+                    probe_gt.append({'img': str(gallery_imname), 'roi': list(gt.astype('float'))})
+                    iou_thresh = min(.5, (w * h * 1.0) / ((w + 10) * (h + 10)))
+                    inds = np.argsort(sim)[::-1]
+                    sim = sim[inds]
+                    det = det[inds]
+
+                    # label[0] = 1
+                    # count_tp += 1
+                    # """
+                    # only set the first matched det as true positive
+                    for j, roi in enumerate(det[:, :4]):
+                        if _compute_iou(roi, gt) >= iou_thresh:
+                            label[j] = 1
+                            count_tp += 1
+                            break
+                    # """
+
+                y_true.extend(list(label))
+
+                y_score.extend(list(sim))
+                imgs.extend([gallery_imname] * len(sim))
+                rois.extend(list(det))
+                tested.add(gallery_imname)
+            # 2. Go through the remaining gallery images if using full set
+            if use_full_set:
+                pass  # TODO
+            # 3. Compute AP for this probe (need to scale by recall rate)
+            y_score = np.asarray(y_score)
+            y_true = np.asarray(y_true)
+
+            assert count_tp <= count_gt
+
+            if count_gt == 0:
+                print(probe_imname, i)
+                break
+            recall_rate = count_tp * 1.0 / count_gt
+            ap = 0 if count_tp == 0 else average_precision_score(y_true, y_score) * recall_rate
+
+            rec.append(recall_rate)
+            aps.append(ap)
+            inds = np.argsort(y_score)[::-1]
+            y_score = y_score[inds]
+            y_true = y_true[inds]
+
+
+
+            """
+            num = 0.0
+            ap = []
+            for i, y_t in enumerate(y_true):
+                if y_t == 1:
+                    num += 1
+                    ap.append(num / (int(i) + 1))
+            aps.append(np.mean(ap))
+            """
+
+            accs.append([min(1, sum(y_true[:k])) for k in topk])
+
+            # compute time cost
+            end = time.time()
+
+        return rec, aps, accs
+
+    def calc_detection_prec_rec(self, gt_boxlists, pred_boxlists, iou_thresh=0.5):
         """Calculate precision and recall based on evaluation code of PASCAL VOC.
         This function calculates precision and recall of
         predicted bounding boxes obtained from a dataset which has :math:`N`
@@ -213,7 +408,7 @@ class SysuDataset(CocoDataset):
 
         return prec, rec
 
-    def calc_detection_sysu_ap(self, prec, rec, use_07_metric=False):
+    def calc_detection_ap(self, prec, rec, use_07_metric=False):
         """Calculate average precisions based on evaluation code of PASCAL VOC.
         This function calculates average precisions
         from given precisions and recalls.
@@ -270,221 +465,6 @@ class SysuDataset(CocoDataset):
                 ap[l] = np.sum((mrec[i + 1] - mrec[i]) * mpre[i + 1])
 
         return ap
-
-    def calc_reid_sysu_topk(self, pred_feats, query_feats, test_img_list, query_img_list, query_boxlists, pred_boxlists, gt_boxlists, topk,
-                            det_thresh=0.5, iou_thresh=0.5, gallery_size=100):
-
-        # assert len(test_img_list) == 6978, "Length of test_img lists need to be 6978, but it is {}.".format(len(test_img_list))
-        assert len(query_img_list) == 2900, "Length of query_img lists need to be 2900, but it is {}.".format(
-            len(query_img_list))
-        assert len(query_boxlists) == 2900, "Length of query_boxlists lists need to be 2900, but it is {}.".format(
-            len(query_boxlists))
-        assert len(gt_boxlists) == len(pred_boxlists), "Length of gt and pred lists need to be same."
-        assert isinstance(topk, (list, tuple)), "topk must be a list or tuple !"
-
-
-        ############################# path #############################
-        annotation_dir = './data/sysu/SIPN_annotation/'
-
-        test_all_file = 'testAllDF.csv'
-        query_file = 'queryDF.csv'
-        q_to_g_file = 'q_to_g' + str(gallery_size) + 'DF.csv'
-
-        test_all = pd.read_csv(osp.join(annotation_dir, test_all_file))
-        query_boxes = pd.read_csv(osp.join(annotation_dir, query_file))
-        queries_to_galleries = pd.read_csv(osp.join(annotation_dir, q_to_g_file))
-
-        test_all, query_boxes = delta_to_coordinates(test_all, query_boxes)
-        ################################ initial ################################
-        test_imnames = test_img_list
-        query_imnames = query_img_list
-        gallery_det = pred_boxlists
-        gallery_feat = pred_feats
-        probe_feat = [p_f.squeeze() for p_f in query_feats]
-
-        use_full_set = gallery_size == -1
-        df = test_all.copy()
-
-        # ====================formal=====================
-        name_to_det_feat = {}
-        for name, det, feat in zip(test_imnames, gallery_det, gallery_feat):
-            scores = det[:, 4].ravel()
-            inds = np.where(scores >= det_thresh)[0]
-            if len(inds) > 0:
-                name_to_det_feat[name] = (det[inds], feat[inds])
-
-        # # =====================debug=====================
-        # f = open('name_to_det_feat.pkl', 'rb+')
-        # name_to_det_feat = pickle.load(f)
-        # # ======================end======================
-
-        rec = []
-        rec_ideal = []
-        aps = []
-        aps_ideal = []  ### Ideal situation
-        accs = []
-        accs_ideal = []  ### Ideal situation
-        topk = topk
-        # ret  # TODO: save json
-        for i in range(len(probe_feat)):
-            pid = query_boxes.loc[i, 'pid']
-            num_g = query_boxes.loc[i, 'num_g']
-            y_true, y_score = [], []
-            y_true_ideal = []  ### Ideal situation
-            imgs, rois = [], []
-            count_gt, count_tp = 0, 0
-            count_tp_ideal = 0  ### Ideal situation
-            # Get L2-normalized feature vector
-            feat_p = probe_feat[i].ravel()
-            # Ignore the probe image
-            start = time.time()
-            probe_imname = queries_to_galleries.iloc[i, 0]
-            probe_gt = []
-            tested = set([probe_imname])
-            # 1. Go through the gallery samples defined by the protocol
-            for g_i in range(1, gallery_size + 1):
-
-                gallery_imname = queries_to_galleries.iloc[i, g_i]
-                if g_i <= num_g:
-                    gt = df.query('imname==@gallery_imname and pid==@pid')
-                    gt = gt.loc[:, 'x1': 'y2'].values.ravel()
-                else:
-                    gt = np.array([])
-                count_gt += (gt.size > 0)
-                # compute distance between probe and gallery dets
-                if gallery_imname not in name_to_det_feat: continue
-
-                det, feat_g = name_to_det_feat[gallery_imname]
-                # get L2-normalized feature matrix NxD
-                assert feat_g.size == np.prod(feat_g.shape[:2])
-                feat_g = feat_g.reshape(feat_g.shape[:2])
-                # compute cosine similarities
-                sim = feat_g.dot(feat_p).ravel()
-                # assign label for each det
-                label = np.zeros(len(sim), dtype=np.int32)
-                label_ideal = np.zeros(len(sim), dtype=np.int32)  ### Ideal situation
-                if gt.size > 0:
-                    w, h = gt[2] - gt[0], gt[3] - gt[1]
-                    probe_gt.append({'img': str(gallery_imname), 'roi': list(gt.astype('float'))})
-                    iou_thresh = min(.5, (w * h * 1.0) / ((w + 10) * (h + 10)))
-                    inds = np.argsort(sim)[::-1]
-                    sim = sim[inds]
-                    det = det[inds]
-
-                    label_ideal[0] = 1  # Ideally
-                    count_tp_ideal += 1  # Ideally
-                    # label[0] = 1
-                    # count_tp += 1
-                    # """
-                    # only set the first matched det as true positive
-                    for j, roi in enumerate(det[:, :4]):
-                        if _compute_iou(roi, gt) >= iou_thresh:
-                            label[j] = 1
-                            count_tp += 1
-                            break
-                    # """
-
-                y_true.extend(list(label))
-                y_true_ideal.extend(list(label_ideal))  ### Ideal situation
-                y_score.extend(list(sim))
-                imgs.extend([gallery_imname] * len(sim))
-                rois.extend(list(det))
-                tested.add(gallery_imname)
-            # 2. Go through the remaining gallery images if using full set
-            if use_full_set:
-                pass  # TODO
-            # 3. Compute AP for this probe (need to scale by recall rate)
-            y_score = np.asarray(y_score)
-            y_true = np.asarray(y_true)
-            y_true_ideal = np.asarray(y_true_ideal)  ### Ideal situation
-            assert count_tp <= count_gt
-            assert count_tp_ideal <= count_gt  ### Ideal situation
-            if count_gt == 0:
-                print(probe_imname, i)
-                break
-            recall_rate = count_tp * 1.0 / count_gt
-            recall_rate_ideal = count_tp_ideal * 1.0 / count_gt  ### Ideal situation
-            ap = 0 if count_tp == 0 else average_precision_score(y_true, y_score) * recall_rate
-            ap_ideal = 0 if count_tp_ideal == 0 else average_precision_score(y_true_ideal,
-                                                                             y_score) * recall_rate_ideal  ### Ideal situation
-            rec.append(recall_rate)
-            rec_ideal.append(recall_rate_ideal)
-            aps.append(ap)
-            aps_ideal.append(ap_ideal)  ### Ideal situation
-            inds = np.argsort(y_score)[::-1]
-            y_score = y_score[inds]
-            y_true = y_true[inds]
-            y_true_ideal = y_true_ideal[inds]  ### Ideal situation
-
-
-            """
-            num = 0.0
-            ap = []
-            for i, y_t in enumerate(y_true):
-                if y_t == 1:
-                    num += 1
-                    ap.append(num / (int(i) + 1))
-            aps.append(np.mean(ap))
-            """
-
-            accs.append([min(1, sum(y_true[:k])) for k in topk])
-            accs_ideal.append([min(1, sum(y_true_ideal[:k])) for k in topk])  ### Ideal situation
-            # compute time cost
-            end = time.time()
-
-        return (rec, aps, accs), (rec_ideal, aps_ideal, accs_ideal)
-
-    def eval_reid_sysu(self, pred_feats, query_feats, test_img_list, query_img_list, query_boxlists, pred_boxlists, gt_boxlists, iou_thresh=0.5,
-                       use_07_metric=False, gallery_size=100):
-        """Evaluate on voc dataset.
-        Args:
-            pred_boxlists(list[BoxList]): pred boxlist, has labels and scores fields.
-            gt_boxlists(list[BoxList]): ground truth boxlist, has labels field.
-            iou_thresh: iou thresh
-            use_07_metric: boolean
-        Returns:
-            dict represents the results
-        """
-        # assert len(test_img_list) == 6978, "Length of test_img lists need to be 6978, but it is {}.".format(len(test_img_list))
-        assert len(query_img_list) == 2900, "Length of query_img lists need to be 2900, but it is {}.".format(
-            len(query_img_list))
-        assert len(query_boxlists) == 2900, "Length of query_boxlists lists need to be 2900, but it is {}.".format(
-            len(query_boxlists))
-        assert len(gt_boxlists) == len(pred_boxlists), "Length of gt and pred lists need to be same."
-
-        result = {}
-        result.update({'model': 'model_0'})
-
-        prec, rec = self.calc_detection_sysu_prec_rec(pred_boxlists=pred_boxlists, gt_boxlists=gt_boxlists, iou_thresh=iou_thresh)
-        Detection_Precision = 100 * np.nanmean(prec[1])
-        Detection_Recall = 100 * np.nanmean(rec[1])
-        result.update({'Detection_Precision': Detection_Precision})
-        result.update({'Detection_Recall': Detection_Recall})
-        ap = self.calc_detection_sysu_ap(prec, rec, use_07_metric=use_07_metric)
-        Detection_mean_Avg_Precision = np.nanmean(ap)
-        result.update({'Detection_mean_Avg_Precision': Detection_mean_Avg_Precision})
-
-        ##################  Re-ID   ###################
-        topk = [1, 3, 5, 10]
-        # CMC = []
-        real_result, ideal_result = self.calc_reid_sysu_topk(pred_feats, query_feats, test_img_list, query_img_list, query_boxlists, pred_boxlists,
-                                                        gt_boxlists, topk, det_thresh=0.5, iou_thresh=0.5,
-                                                        gallery_size=gallery_size)
-        rec, aps, accs = real_result
-        rec_ideal, aps_ideal, accs_ideal = ideal_result
-        ReID_Recall = np.nanmean(rec)
-        ReID_Recall_Ideal = np.nanmean(rec_ideal)
-        ReID_mean_Avg_Precision = np.nanmean(aps)
-        ReID_mean_Avg_Precision_Ideal = np.nanmean(aps_ideal)
-        result.update({'ReID_Recall': ReID_Recall})
-        result.update({'ReID_Recall_Ideal': ReID_Recall_Ideal})
-        result.update({'ReID_mean_Avg_Precision': ReID_mean_Avg_Precision})
-        result.update({'ReID_mean_Avg_Precision_Ideal': ReID_mean_Avg_Precision_Ideal})
-        accs = np.mean(accs, axis=0)
-        accs_ideal = np.mean(accs_ideal, axis=0)
-        result.update({'CMC': accs})
-        result.update({'CMC_Ideal': accs_ideal})
-        return result
 
 def _compute_iou(a, b):
     x1 = max(a[0], b[0])

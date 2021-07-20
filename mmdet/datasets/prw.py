@@ -47,7 +47,7 @@ class PrwDataset(CocoDataset):
 
     def evaluate(self, predictions, dataset):
         if self.with_reid:
-            result = self.evaluate_reid(predictions, dataset)
+            result = self.evaluate_search(predictions, dataset)
         else:
             result = self.evaluate_detection(predictions)
 
@@ -57,7 +57,7 @@ class PrwDataset(CocoDataset):
         result_str += "###########################################\n"
         return result_str
 
-    def evaluate_reid(self, predictions, dataset, gallery_size=-1, iou_thr=0.5):
+    def evaluate_search(self, predictions, dataset, gallery_size=-1, iou_thr=0.5):
         # detection
         pred_boxlists = []
         gt_boxlists = []
@@ -67,7 +67,7 @@ class PrwDataset(CocoDataset):
             pred_boxlists.append(prediction[0][0][0])
             gt_boxlist = dataset[0].get_ann_info(image_id)['bboxes']
             gt_boxlists.append(gt_boxlist)
-        det_result = self.eval_detection_sysu(pred_boxlists=pred_boxlists, gt_boxlists=gt_boxlists,
+        det_result = self.eval_detect(pred_boxlists=pred_boxlists, gt_boxlists=gt_boxlists,
                                               iou_thresh=iou_thr, use_07_metric=False)
         # person search
         reid_result, save_result = self.search_performance_calc(predictions, dataset, gallery_size)
@@ -85,11 +85,11 @@ class PrwDataset(CocoDataset):
             pred_boxlists.append(prediction)
             gt_boxlists.append(gt_boxlist)
 
-        result = self.eval_detection_sysu(pred_boxlists=pred_boxlists, gt_boxlists=gt_boxlists,
+        result = self.eval_detect(pred_boxlists=pred_boxlists, gt_boxlists=gt_boxlists,
                                           iou_thresh=iou_thr, use_07_metric=False)
         return result
 
-    def eval_detection_sysu(self, pred_boxlists, gt_boxlists, iou_thresh=0.5, use_07_metric=False):
+    def eval_detect(self, pred_boxlists, gt_boxlists, iou_thresh=0.5, use_07_metric=False):
         """Evaluate on voc dataset.
         Args:
             pred_boxlists(list[BoxList]): pred boxlist, has labels and scores fields.
@@ -102,10 +102,10 @@ class PrwDataset(CocoDataset):
         assert len(gt_boxlists) == len(
             pred_boxlists
         ), "Length of gt and pred lists need to be same."
-        prec, rec = self.calc_detection_sysu_prec_rec(
+        prec, rec = self.calc_detection_prec_rec(
             pred_boxlists=pred_boxlists, gt_boxlists=gt_boxlists, iou_thresh=iou_thresh
         )
-        ap = self.calc_detection_sysu_ap(prec, rec, use_07_metric=use_07_metric)
+        ap = self.calc_detection_ap(prec, rec, use_07_metric=use_07_metric)
         result = {}
         result.update({'Detection_Precision': np.round(100 * np.nanmean(prec[1]), 2)})
         result.update({'Detection_Recall': np.round(100 * np.nanmean(rec[1]), 2)})
@@ -271,7 +271,7 @@ class PrwDataset(CocoDataset):
             ret['Person_Search_Rank-'+str(k)] = np.round(100 * accs[i], 2)
         return ret, save_results
 
-    def calc_detection_sysu_prec_rec(self, gt_boxlists, pred_boxlists, iou_thresh=0.5):
+    def calc_detection_prec_rec(self, gt_boxlists, pred_boxlists, iou_thresh=0.5):
         """Calculate precision and recall based on evaluation code of PASCAL VOC.
         This function calculates precision and recall of
         predicted bounding boxes obtained from a dataset which has :math:`N`
@@ -359,7 +359,7 @@ class PrwDataset(CocoDataset):
 
         return prec, rec
 
-    def calc_detection_sysu_ap(self, prec, rec, use_07_metric=False):
+    def calc_detection_ap(self, prec, rec, use_07_metric=False):
         """Calculate average precisions based on evaluation code of PASCAL VOC.
         This function calculates average precisions
         from given precisions and recalls.
