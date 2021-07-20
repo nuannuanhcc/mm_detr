@@ -76,8 +76,8 @@ class SysuDataset(CocoDataset):
     def evaluate_detection(self, predictions, iou_thr=0.5):
         pred_boxlists = []
         gt_boxlists = []
-        for image_id, prediction in enumerate(predictions):
-            prediction = prediction[0]  #  TODO n_box * 5
+        for image_id, prediction in enumerate(predictions[0]):
+            prediction = prediction[0][0]  #  TODO n_box * 5
             gt_boxlist = self.get_ann_info(image_id)['bboxes']
             if len(prediction) == 0:
                 continue

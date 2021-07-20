@@ -129,11 +129,11 @@ train_pipeline = [
                     img_scale=[(400, 4200), (500, 4200), (600, 4200)],
                     multiscale_mode='value',
                     keep_ratio=True),
-                dict(
-                    type='RandomCrop',
-                    crop_type='absolute_range',
-                    crop_size=(384, 600),
-                    allow_negative_crop=True),
+                # dict(
+                #     type='RandomCrop',
+                #     crop_type='absolute_range',
+                #     crop_size=(384, 600),
+                #     allow_negative_crop=True),
                 dict(
                     type='Resize',
                     img_scale=[(480, 1333), (512, 1333), (544, 1333),
