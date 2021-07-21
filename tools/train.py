@@ -208,7 +208,7 @@ def main():
             for ds in dataset]
 
         for i in range(cfg.runner.max_epochs, 0, -1):
-            model = build_detector(cfg.model, train_cfg=None, test_cfg=cfg.test_cfg)
+            model = build_detector(cfg.model, test_cfg=cfg.get('test_cfg'))
             ckpt = os.path.join(cfg.work_dir, 'epoch_' + str(i) + '.pth')
             load_checkpoint(model, ckpt, map_location='cpu')
 
