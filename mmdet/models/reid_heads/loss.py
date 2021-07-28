@@ -87,7 +87,7 @@ class OIMLossComputation(nn.Module):
             raise KeyError(cfg.DATASETS.TRAIN)
 
         self.lut_momentum = 0.0
-        self.out_channels = 2048
+        self.out_channels = 256
 
         self.register_buffer('lut', torch.zeros(self.num_pid, self.out_channels).cuda())
         self.register_buffer('queue', torch.zeros(self.queue_size, self.out_channels).cuda())
@@ -119,7 +119,7 @@ class CIRCLELossComputation(nn.Module):
         else:
             raise KeyError(cfg.DATASETS.TRAIN)
 
-        self.out_channels = 2048
+        self.out_channels = 256
 
         self.register_buffer('pointer', torch.zeros(2, dtype=torch.int).cuda())
         self.register_buffer('id_inx', -torch.ones(num_labeled, dtype=torch.long).cuda())

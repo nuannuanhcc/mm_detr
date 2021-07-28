@@ -14,18 +14,27 @@ class REIDModule(torch.nn.Module):
         super(REIDModule, self).__init__()
         self.cfg = cfg
         self.loss_evaluator = make_reid_loss_evaluator(cfg)
-        self.fc = nn.Linear(256 * 6, 2048)
+        # self.fc = nn.Linear(256 * 6, 2048)
 
     def forward(self, x, gt_labels=None):
         #         from IPython import embed
         #         embed()
 
         #         x = x.view(x.size(0), -1)
-        x = self.fc(x)
-        feats = F.normalize(x, dim=-1)
+        # x = self.fc(x)
+        if isinstance(x, list):
+            feats = [F.normalize(i, dim=-1) for i in x]
+        else:
+            feats = F.normalize(x, dim=-1)
+
         if not self.training:
             return feats
-        loss_reid = self.loss_evaluator(feats, gt_labels)
+
+        if isinstance(feats, list):
+            loss_reid = [self.loss_evaluator(i, gt_labels) for i in feats]
+            loss_reid = sum(loss_reid) / len(loss_reid)
+        else:
+            loss_reid = self.loss_evaluator(feats, gt_labels)
         return {"loss_reid": [loss_reid], }
 
 
