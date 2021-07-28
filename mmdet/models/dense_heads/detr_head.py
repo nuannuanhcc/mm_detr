@@ -265,6 +265,7 @@ class DETRHead(AnchorFreeHead):
 
     @force_fp32(apply_to=('all_cls_scores_list', 'all_bbox_preds_list'))
     def loss(self,
+
              all_cls_scores_list,
              all_bbox_preds_list,
              gt_bboxes_list,
@@ -331,6 +332,7 @@ class DETRHead(AnchorFreeHead):
         return loss_dict
 
     def loss_single(self,
+                    reid_feats,
                     cls_scores,
                     bbox_preds,
                     gt_bboxes_list,
@@ -359,6 +361,7 @@ class DETRHead(AnchorFreeHead):
                 a single decoder layer.
         """
         num_imgs = cls_scores.size(0)
+        reid_feats_list = [reid_feats[i] for i in range(num_imgs)]
         cls_scores_list = [cls_scores[i] for i in range(num_imgs)]
         bbox_preds_list = [bbox_preds[i] for i in range(num_imgs)]
         cls_reg_targets = self.get_targets(cls_scores_list, bbox_preds_list,
@@ -413,7 +416,13 @@ class DETRHead(AnchorFreeHead):
         # regression L1 loss
         loss_bbox = self.loss_bbox(
             bbox_preds, bbox_targets, bbox_weights, avg_factor=num_total_pos)
-        return loss_cls, loss_bbox, loss_iou
+
+        # reid loss
+        reid_feats = torch.cat(reid_feats_list, 0)  # n*c
+        ind_pos = torch.nonzero(bbox_weights[:, 0] > 0).squeeze(-1)
+        reid_feats_pos = reid_feats[ind_pos]
+
+        return reid_feats_pos, loss_cls, loss_bbox, loss_iou
 
     def get_targets(self,
                     cls_scores_list,
@@ -580,6 +589,7 @@ class DETRHead(AnchorFreeHead):
 
     @force_fp32(apply_to=('all_cls_scores_list', 'all_bbox_preds_list'))
     def get_bboxes(self,
+                   all_reid_feats_list,
                    all_cls_scores_list,
                    all_bbox_preds_list,
                    img_metas,
@@ -608,16 +618,18 @@ class DETRHead(AnchorFreeHead):
         """
         # NOTE defaultly only using outputs from the last feature level,
         # and only the outputs from the last decoder layer is used.
+        reid_feats = all_reid_feats_list[-1][-1]
         cls_scores = all_cls_scores_list[-1][-1]
         bbox_preds = all_bbox_preds_list[-1][-1]
 
         result_list = []
         for img_id in range(len(img_metas)):
+            reid_feat = reid_feats[img_id]
             cls_score = cls_scores[img_id]
             bbox_pred = bbox_preds[img_id]
             img_shape = img_metas[img_id]['img_shape']
             scale_factor = img_metas[img_id]['scale_factor']
-            proposals = self._get_bboxes_single(cls_score, bbox_pred,
+            proposals = self._get_bboxes_single(reid_feat, cls_score, bbox_pred,
                                                 img_shape, scale_factor,
                                                 rescale)
             result_list.append(proposals)
@@ -625,6 +637,7 @@ class DETRHead(AnchorFreeHead):
         return result_list
 
     def _get_bboxes_single(self,
+                           reid_feat,
                            cls_score,
                            bbox_pred,
                            img_shape,
@@ -655,7 +668,7 @@ class DETRHead(AnchorFreeHead):
                 - det_labels: Predicted labels of the corresponding box with \
                     shape [num_query].
         """
-        assert len(cls_score) == len(bbox_pred)
+        assert len(reid_feat) == len(cls_score) == len(bbox_pred)
         max_per_img = self.test_cfg.get('max_per_img', self.num_query)
         # exclude background
         if self.loss_cls.use_sigmoid:
@@ -679,7 +692,7 @@ class DETRHead(AnchorFreeHead):
             det_bboxes /= det_bboxes.new_tensor(scale_factor)
         det_bboxes = torch.cat((det_bboxes, scores.unsqueeze(1)), -1)
 
-        return det_bboxes, det_labels
+        return reid_feat[bbox_index], det_bboxes, det_labels
 
     def simple_test_bboxes(self, feats, img_metas, rescale=False):
         """Test det bboxes without test-time augmentation.
