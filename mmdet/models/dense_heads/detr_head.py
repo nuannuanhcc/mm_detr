@@ -418,11 +418,15 @@ class DETRHead(AnchorFreeHead):
             bbox_preds, bbox_targets, bbox_weights, avg_factor=num_total_pos)
 
         # reid loss
-        reid_feats = torch.cat(reid_feats_list, 0)  # n*c
-        ind_pos = torch.nonzero(bbox_weights[:, 0] > 0).squeeze(-1)
-        reid_feats_pos = reid_feats[ind_pos]
+        de_idx = torch.nonzero(bbox_weights[:, 0] > 0).squeeze(-1)
+        ori_gt = torch.cat(gt_bboxes_list)
+        idx_gt = bboxes_gt[de_idx]
+        idx_de = bboxes[de_idx]
+        idx_reid_feats = torch.cat(reid_feats_list, 0)[de_idx]  # n*c
+        ori_idx = torch.stack([torch.argmin(torch.abs(i - idx_gt).sum(dim=-1)) for i in ori_gt])
+        assert set(ori_idx.tolist()) == set(range(idx_gt.shape[0]))
 
-        return reid_feats_pos, loss_cls, loss_bbox, loss_iou
+        return idx_reid_feats[ori_idx], loss_cls, loss_bbox, loss_iou
 
     def get_targets(self,
                     cls_scores_list,
