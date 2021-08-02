@@ -106,11 +106,11 @@ def parse_args():
 def main():
     args = parse_args()
 
-    assert args.out or args.eval or args.format_only or args.show \
-        or args.show_dir, \
-        ('Please specify at least one operation (save/eval/format/show the '
-         'results / save the results) with the argument "--out", "--eval"'
-         ', "--format-only", "--show" or "--show-dir"')
+    # assert args.out or args.eval or args.format_only or args.show \
+    #     or args.show_dir, \
+    #     ('Please specify at least one operation (save/eval/format/show the '
+    #      'results / save the results) with the argument "--out", "--eval"'
+    #      ', "--format-only", "--show" or "--show-dir"')
 
     if args.eval and args.format_only:
         raise ValueError('--eval and --format_only cannot be both specified')
@@ -173,13 +173,17 @@ def main():
         json_file = osp.join(args.work_dir, f'eval_{timestamp}.json')
 
     # build the dataloader
-    dataset = build_dataset(cfg.data.test)
-    data_loader = build_dataloader(
-        dataset,
-        samples_per_gpu=samples_per_gpu,
-        workers_per_gpu=cfg.data.workers_per_gpu,
-        dist=distributed,
-        shuffle=False)
+    dataset = [build_dataset(cfg.data.test)]
+    if cfg.data.test.with_reid:
+        dataset.append(build_dataset(cfg.data.query))
+    data_loader = [
+        build_dataloader(
+            ds,
+            samples_per_gpu=samples_per_gpu,
+            workers_per_gpu=cfg.data.workers_per_gpu,
+            dist=distributed,
+            shuffle=False)
+        for ds in dataset]
 
     # build the model and load checkpoint
     cfg.model.train_cfg = None
@@ -199,38 +203,23 @@ def main():
 
     if not distributed:
         model = MMDataParallel(model, device_ids=[0])
-        outputs = single_gpu_test(model, data_loader, args.show, args.show_dir,
-                                  args.show_score_thr)
+        outputs = [single_gpu_test(model, dl, args.show, args.show_dir,
+                                   args.show_score_thr) for dl in data_loader]
     else:
         model = MMDistributedDataParallel(
             model.cuda(),
             device_ids=[torch.cuda.current_device()],
             broadcast_buffers=False)
-        outputs = multi_gpu_test(model, data_loader, args.tmpdir,
-                                 args.gpu_collect)
+        outputs = [multi_gpu_test(model, dl, args.tmpdir,
+                                  args.gpu_collect) for dl in data_loader]
 
     rank, _ = get_dist_info()
     if rank == 0:
-        if args.out:
-            print(f'\nwriting results to {args.out}')
-            mmcv.dump(outputs, args.out)
-        kwargs = {} if args.eval_options is None else args.eval_options
-        if args.format_only:
-            dataset.format_results(outputs, **kwargs)
-        if args.eval:
-            eval_kwargs = cfg.get('evaluation', {}).copy()
-            # hard-code way to remove EvalHook args
-            for key in [
-                    'interval', 'tmpdir', 'start', 'gpu_collect', 'save_best',
-                    'rule'
-            ]:
-                eval_kwargs.pop(key, None)
-            eval_kwargs.update(dict(metric=args.eval, **kwargs))
-            metric = dataset.evaluate(outputs, **eval_kwargs)
-            print(metric)
-            metric_dict = dict(config=args.config, metric=metric)
-            if args.work_dir is not None and rank == 0:
-                mmcv.dump(metric_dict, json_file)
+        print('Starting evaluate {}'.format(args.checkpoint))
+        result = dataset[0].evaluate(outputs, dataset)
+        with open(os.path.join(args.work_dir, "eva_result.txt"), "a") as fid:
+            fid.write(args.checkpoint+'\n')
+            fid.write(result+'\n')
 
 
 if __name__ == '__main__':
