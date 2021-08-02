@@ -1,7 +1,7 @@
 import warnings
 
 import torch
-
+import numpy as np
 from mmdet.core import bbox2result, bbox2roi
 from ..builder import DETECTORS, build_backbone, build_head, build_neck, build_roi_extractor
 from .base import BaseDetector
@@ -84,15 +84,18 @@ class SingleStageDetector(BaseDetector):
         super(SingleStageDetector, self).forward_train(img, img_metas)
         x = self.extract_feat(img)
         cls_labels = [i[:, 0] for i in gt_labels] if self.train_cfg.with_reid else gt_labels
-        losses = self.bbox_head.forward_train(x, img_metas, gt_bboxes,
+        losses_all = self.bbox_head.forward_train(x, img_metas, gt_bboxes,
                                               cls_labels, gt_bboxes_ignore)
+        losses = losses_all[0]
+        de_bboxes = losses_all[1]
+
         # detection
         if not self.train_cfg.with_reid:
             return losses
 
         # person search
         bbox_feats = self.bbox_roi_extractor(
-            x[:self.bbox_roi_extractor.num_inputs], bbox2roi(gt_bboxes))
+            x[:self.bbox_roi_extractor.num_inputs], bbox2roi(de_bboxes[-1]))
         loss_reid = self.reid_head(bbox_feats, gt_labels)
         losses.update(loss_reid)
         return losses
@@ -114,14 +117,18 @@ class SingleStageDetector(BaseDetector):
         # person search -- query
         if gt_bboxes is not None:
             feat = self.extract_feat(img)
-            gt_bbox_list = gt_bboxes[0][0]  # [n, 4]
-            gt_bbox_feats = self.bbox_roi_extractor(
-                feat[:self.bbox_roi_extractor.num_inputs], bbox2roi([gt_bbox_list]))
-            gt_bbox_feats = self.reid_head(gt_bbox_feats)
-            gt_bbox_list = torch.cat([gt_bbox_list / img_metas[0]['scale_factor'][0],  # TODO multi-scale
-                                      torch.ones(gt_bbox_list.shape[0], 1).cuda()], dim=-1)
-            bbox_results = [bbox2result(gt_bbox_list, torch.zeros(gt_bbox_list.shape[0]), self.bbox_head.num_classes)]
-            return bbox_results, gt_bbox_feats.cpu().numpy()
+            results_list = self.bbox_head.simple_test(
+                feat, img_metas, rescale=rescale)
+            bbox_results = [
+                bbox2result(det_bboxes, det_labels, self.bbox_head.num_classes)
+                for det_bboxes, det_labels in results_list
+            ]
+            pre_bbox_list = results_list[0][0] * img_metas[0]['scale_factor'][0]
+            index = self.bbox_iou(pre_bbox_list.cpu().numpy(), gt_bboxes[0][0][0].cpu().numpy())
+            pre_bbox_feats = self.bbox_roi_extractor(
+                feat[:self.bbox_roi_extractor.num_inputs], bbox2roi([pre_bbox_list[index:index + 1]]))
+            pre_bbox_feats = self.reid_head(pre_bbox_feats)
+            return [[bbox_results[0][0][index:index + 1]]], pre_bbox_feats.cpu().numpy()
 
         feat = self.extract_feat(img)
         results_list = self.bbox_head.simple_test(
@@ -198,3 +205,26 @@ class SingleStageDetector(BaseDetector):
         det_bboxes, det_labels = self.bbox_head.get_bboxes(*outs, img_metas)
 
         return det_bboxes, det_labels
+
+    def bbox_iou(self, boxes, gt):
+            x1 = boxes[:, 0]
+            y1 = boxes[:, 1]
+            x2 = boxes[:, 2]
+            y2 = boxes[:, 3]
+
+            areas_boxes = (x2 - x1 + 1) * (y2 - y1 + 1)
+            areas_gt = (gt[2] - gt[0]) * (gt[3] - gt[1])
+
+            x1_max = np.maximum(gt[0], boxes[:, 0])
+            y1_max = np.maximum(gt[1], boxes[:, 1])
+            x2_min = np.minimum(gt[2], boxes[:, 2])
+            y2_min = np.minimum(gt[3], boxes[:, 3])
+
+            w = np.maximum(x2_min - x1_max + 1, 0.0)
+            h = np.maximum(y2_min - y1_max + 1, 0.0)
+            inter = w * h
+            union = areas_boxes + areas_gt - inter
+            iou = inter / union
+            if iou.max() < 0.8:
+                print("###############", iou.max())
+            return iou.argmax()

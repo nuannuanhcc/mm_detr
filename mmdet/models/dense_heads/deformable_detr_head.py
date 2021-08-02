@@ -229,7 +229,7 @@ class DeformableDETRHead(DETRHead):
         ]
         img_metas_list = [img_metas for _ in range(num_dec_layers)]
 
-        losses_cls, losses_bbox, losses_iou = multi_apply(
+        losses_cls, losses_bbox, losses_iou, b_de = multi_apply(
             self.loss_single, all_cls_scores, all_bbox_preds,
             all_gt_bboxes_list, all_gt_labels_list, img_metas_list,
             all_gt_bboxes_ignore_list)
@@ -262,7 +262,7 @@ class DeformableDETRHead(DETRHead):
             loss_dict[f'd{num_dec_layer}.loss_bbox'] = loss_bbox_i
             loss_dict[f'd{num_dec_layer}.loss_iou'] = loss_iou_i
             num_dec_layer += 1
-        return loss_dict
+        return loss_dict, b_de
 
     @force_fp32(apply_to=('all_cls_scores_list', 'all_bbox_preds_list'))
     def get_bboxes(self,
