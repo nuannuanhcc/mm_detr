@@ -536,6 +536,7 @@ class DeformableDetrTransformer(Transformer):
                 mlvl_pos_embeds,
                 reg_branches=None,
                 cls_branches=None,
+                reid_branches=None,
                 **kwargs):
         """Forward function for `Transformer`.
 
@@ -645,6 +646,8 @@ class DeformableDetrTransformer(Transformer):
                 reg_branches[
                     self.decoder.num_layers](output_memory) + output_proposals
 
+            enc_outputs_reid = reid_branches[self.decoder.num_layers](output_memory)
+            
             topk = self.two_stage_num_proposals
             topk_proposals = torch.topk(
                 enc_outputs_class[..., 0], topk, dim=1)[1]
@@ -685,9 +688,9 @@ class DeformableDetrTransformer(Transformer):
         if self.as_two_stage:
             return inter_states, init_reference_out,\
                 inter_references_out, enc_outputs_class,\
-                enc_outputs_coord_unact
+                enc_outputs_coord_unact, enc_outputs_reid
         return inter_states, init_reference_out, \
-            inter_references_out, None, None
+            inter_references_out, None, None, None
 
 
 @TRANSFORMER.register_module()

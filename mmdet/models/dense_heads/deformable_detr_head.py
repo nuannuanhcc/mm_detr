@@ -142,13 +142,14 @@ class DeformableDETRHead(DETRHead):
         if not self.as_two_stage:
             query_embeds = self.query_embedding.weight
         hs, init_reference, inter_references, \
-            enc_outputs_class, enc_outputs_coord = self.transformer(
+            enc_outputs_class, enc_outputs_coord, enc_outputs_reid = self.transformer(
                     mlvl_feats,
                     mlvl_masks,
                     query_embeds,
                     mlvl_positional_encodings,
                     reg_branches=self.reg_branches if self.with_box_refine else None,  # noqa:E501
-                    cls_branches=self.cls_branches if self.as_two_stage else None  # noqa:E501
+                    cls_branches=self.cls_branches if self.as_two_stage else None,  # noqa:E501
+                    reid_branches=self.reid_branches if self.as_two_stage else None  # noqa:E501
             )
         hs = hs.permute(0, 2, 1, 3)
         outputs_reids = []
@@ -178,12 +179,12 @@ class DeformableDETRHead(DETRHead):
         outputs_classes = torch.stack(outputs_classes)
         outputs_coords = torch.stack(outputs_coords)
         if self.as_two_stage:
-            return outputs_classes, outputs_coords, \
+            return outputs_reids, outputs_classes, outputs_coords, \
                 enc_outputs_class, \
-                enc_outputs_coord.sigmoid()
+                enc_outputs_coord.sigmoid(), enc_outputs_reid
         else:
             return outputs_reids, outputs_classes, outputs_coords, \
-                None, None
+                None, None, None
 
     @force_fp32(apply_to=('all_cls_scores_list', 'all_bbox_preds_list'))
     def loss(self,
@@ -192,6 +193,7 @@ class DeformableDETRHead(DETRHead):
              all_bbox_preds,
              enc_cls_scores,
              enc_bbox_preds,
+             enc_outputs_reid,
              gt_bboxes_list,
              gt_labels_list,
              img_metas,
@@ -248,8 +250,8 @@ class DeformableDETRHead(DETRHead):
                 torch.zeros_like(gt_labels_list[i])
                 for i in range(len(img_metas))
             ]
-            enc_loss_cls, enc_losses_bbox, enc_losses_iou = \
-                self.loss_single(enc_cls_scores, enc_bbox_preds,
+            enc_reid_feats, enc_loss_cls, enc_losses_bbox, enc_losses_iou = \
+                self.loss_single(enc_outputs_reid, enc_cls_scores, enc_bbox_preds,
                                  gt_bboxes_list, binary_labels_list,
                                  img_metas, gt_bboxes_ignore)
             loss_dict['enc_loss_cls'] = enc_loss_cls
@@ -269,7 +271,11 @@ class DeformableDETRHead(DETRHead):
             loss_dict[f'd{num_dec_layer}.loss_bbox'] = loss_bbox_i
             loss_dict[f'd{num_dec_layer}.loss_iou'] = loss_iou_i
             num_dec_layer += 1
-        return torch.cat(reid_feats, 1), loss_dict
+
+        if enc_outputs_reid is not None:
+            return torch.cat(reid_feats + [enc_reid_feats], 1), loss_dict
+        else:
+            return torch.cat(reid_feats, 1), loss_dict
 
     @force_fp32(apply_to=('all_cls_scores_list', 'all_bbox_preds_list'))
     def get_bboxes(self,
@@ -278,6 +284,7 @@ class DeformableDETRHead(DETRHead):
                    all_bbox_preds,
                    enc_cls_scores,
                    enc_bbox_preds,
+                   enc_reid_feats,
                    img_metas,
                    rescale=False):
         """Transform network outputs for a batch into bbox predictions.
@@ -324,5 +331,10 @@ class DeformableDETRHead(DETRHead):
             result_list.append(proposals)
 
         reid_features = [i[0][proposals[0]] for i in all_reid_feats]
-        reid_features = torch.cat(reid_features, dim=-1)
-        return result_list, reid_features
+
+        enc_proposals = self._get_bboxes_single(enc_cls_scores[0], enc_bbox_preds[0],
+                                                img_shape, scale_factor,
+                                                rescale)
+        enc_reid_features = enc_reid_feats[0][enc_proposals[0]]
+        all_reid_features = torch.cat(reid_features + [enc_reid_features], dim=-1)
+        return result_list, all_reid_features
