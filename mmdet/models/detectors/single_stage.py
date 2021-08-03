@@ -84,16 +84,17 @@ class SingleStageDetector(BaseDetector):
         super(SingleStageDetector, self).forward_train(img, img_metas)
         x = self.extract_feat(img)
         cls_labels = [i[:, 0] for i in gt_labels] if self.train_cfg.with_reid else gt_labels
-        losses = self.bbox_head.forward_train(x, img_metas, gt_bboxes,
-                                              cls_labels, gt_bboxes_ignore)
+        reid_feats, losses = self.bbox_head.forward_train(x, img_metas, gt_bboxes,
+                                                          cls_labels, gt_bboxes_ignore)
+
         # detection
         if not self.train_cfg.with_reid:
             return losses
 
         # person search
-        bbox_feats = self.bbox_roi_extractor(
-            x[:self.bbox_roi_extractor.num_inputs], bbox2roi(gt_bboxes))
-        loss_reid = self.reid_head(bbox_feats, gt_labels)
+        #         bbox_feats = self.bbox_roi_extractor(
+        #             x[:self.bbox_roi_extractor.num_inputs], bbox2roi(gt_bboxes))
+        loss_reid = self.reid_head(reid_feats, gt_labels)
         losses.update(loss_reid)
         return losses
 
@@ -111,33 +112,68 @@ class SingleStageDetector(BaseDetector):
                 The outer list corresponds to each image. The inner list
                 corresponds to each class.
         """
+
+        def bbox_iou(boxes, gt):
+            import numpy as np
+            x1 = boxes[:, 0]
+            y1 = boxes[:, 1]
+            x2 = boxes[:, 2]
+            y2 = boxes[:, 3]
+
+            areas_boxes = (x2 - x1 + 1) * (y2 - y1 + 1)
+            areas_gt = (gt[2] - gt[0]) * (gt[3] - gt[1])
+
+            x1_max = np.maximum(gt[0], boxes[:, 0])
+            y1_max = np.maximum(gt[1], boxes[:, 1])
+            x2_min = np.minimum(gt[2], boxes[:, 2])
+            y2_min = np.minimum(gt[3], boxes[:, 3])
+
+            w = np.maximum(x2_min - x1_max + 1, 0.0)
+            h = np.maximum(y2_min - y1_max + 1, 0.0)
+            inter = w * h
+            union = areas_boxes + areas_gt - inter
+            iou = inter / union
+            if iou.max() < 0.8:
+                print("###############", iou.max())
+            return iou.argmax()
+
         # person search -- query
         if gt_bboxes is not None:
             feat = self.extract_feat(img)
-            gt_bbox_list = gt_bboxes[0][0]  # [n, 4]
-            gt_bbox_feats = self.bbox_roi_extractor(
-                feat[:self.bbox_roi_extractor.num_inputs], bbox2roi([gt_bbox_list]))
+            results_list, reid_features = self.bbox_head.simple_test(
+                feat, img_metas, rescale=rescale)
+            bbox_results = [
+                bbox2result(det_bboxes, det_labels, self.bbox_head.num_classes)
+                for _, det_bboxes, det_labels in results_list]
+            #             from IPython import embed
+            #             embed()
+            gt_bbox_list = gt_bboxes[0][0] / img_metas[0]['scale_factor'][0]  # [n, 4]
+            index = bbox_iou(bbox_results[0][0], gt_bbox_list[0].cpu().numpy())
+
+            gt_bbox_feats = reid_features[index].unsqueeze(0)
+            # gt_bbox_feats = results_list[0][0][index].repeat(1, 6)
             gt_bbox_feats = self.reid_head(gt_bbox_feats)
-            gt_bbox_list = torch.cat([gt_bbox_list / img_metas[0]['scale_factor'][0],  # TODO multi-scale
-                                      torch.ones(gt_bbox_list.shape[0], 1).cuda()], dim=-1)
-            bbox_results = [bbox2result(gt_bbox_list, torch.zeros(gt_bbox_list.shape[0]), self.bbox_head.num_classes)]
+
             return bbox_results, gt_bbox_feats.cpu().numpy()
 
         feat = self.extract_feat(img)
-        results_list = self.bbox_head.simple_test(
+        results_list, reid_features = self.bbox_head.simple_test(
             feat, img_metas, rescale=rescale)
+
         bbox_results = [
             bbox2result(det_bboxes, det_labels, self.bbox_head.num_classes)
-            for det_bboxes, det_labels in results_list
+            for _, det_bboxes, det_labels in results_list
         ]
+        pre_bbox_feats = reid_features
+        # pre_bbox_feats = results_list[0][0].repeat(1, 6)
         # only detection
         if not self.test_cfg.with_reid:
             return bbox_results
-        
+
         # person search -- gallery
-        pre_bbox_list = results_list[0][0] * img_metas[0]['scale_factor'][0]
-        pre_bbox_feats = self.bbox_roi_extractor(
-            feat[:self.bbox_roi_extractor.num_inputs], bbox2roi([pre_bbox_list]))
+        #         pre_bbox_list = results_list[0][0] * img_metas[0]['scale_factor'][0]
+        #         pre_bbox_feats = self.bbox_roi_extractor(
+        #             feat[:self.bbox_roi_extractor.num_inputs], bbox2roi([pre_bbox_list]))
         pre_bbox_feats = self.reid_head(pre_bbox_feats)
         return bbox_results, pre_bbox_feats.cpu().numpy()
 
