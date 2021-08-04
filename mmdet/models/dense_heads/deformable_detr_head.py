@@ -70,8 +70,9 @@ class DeformableDETRHead(DETRHead):
             self.cls_branches = _get_clones(fc_cls, num_pred)
             self.reg_branches = _get_clones(reg_branch, num_pred)
         else:
-            self.reid_branches = nn.ModuleList(
-                [reid_branch for _ in range(num_pred)])
+            self.reid_branches = _get_clones(reid_branch, num_pred)
+            # self.reid_branches = nn.ModuleList(
+            #     [reid_branch for _ in range(num_pred)])
             self.cls_branches = nn.ModuleList(
                 [fc_cls for _ in range(num_pred)])
             self.reg_branches = nn.ModuleList(
@@ -269,7 +270,7 @@ class DeformableDETRHead(DETRHead):
             loss_dict[f'd{num_dec_layer}.loss_bbox'] = loss_bbox_i
             loss_dict[f'd{num_dec_layer}.loss_iou'] = loss_iou_i
             num_dec_layer += 1
-        return torch.cat(reid_feats, 1), loss_dict
+        return reid_feats, loss_dict
 
     @force_fp32(apply_to=('all_cls_scores_list', 'all_bbox_preds_list'))
     def get_bboxes(self,
@@ -324,5 +325,5 @@ class DeformableDETRHead(DETRHead):
             result_list.append(proposals)
 
         reid_features = [i[0][proposals[0]] for i in all_reid_feats]
-        reid_features = torch.cat(reid_features, dim=-1)
+        # reid_features = torch.cat(reid_features, dim=-1)
         return result_list, reid_features
