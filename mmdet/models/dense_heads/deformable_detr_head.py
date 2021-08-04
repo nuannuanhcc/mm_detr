@@ -273,9 +273,9 @@ class DeformableDETRHead(DETRHead):
             num_dec_layer += 1
 
         if enc_outputs_reid is not None:
-            return torch.cat(reid_feats + [enc_reid_feats], 1), loss_dict
+            return reid_feats + [enc_reid_feats], loss_dict
         else:
-            return torch.cat(reid_feats, 1), loss_dict
+            return reid_feats, loss_dict
 
     @force_fp32(apply_to=('all_cls_scores_list', 'all_bbox_preds_list'))
     def get_bboxes(self,
@@ -336,5 +336,6 @@ class DeformableDETRHead(DETRHead):
                                                 img_shape, scale_factor,
                                                 rescale)
         enc_reid_features = enc_reid_feats[0][enc_proposals[0]]
-        all_reid_features = torch.cat(reid_features + [enc_reid_features], dim=-1)
-        return result_list, all_reid_features
+        # all_reid_features = torch.cat(reid_features + [enc_reid_features], dim=-1)
+        # return [enc_proposals], reid_features+[enc_reid_features]
+        return result_list, reid_features + [enc_reid_features]

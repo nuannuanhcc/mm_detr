@@ -150,7 +150,7 @@ class SingleStageDetector(BaseDetector):
             gt_bbox_list = gt_bboxes[0][0] / img_metas[0]['scale_factor'][0]  # [n, 4]
             index = bbox_iou(bbox_results[0][0], gt_bbox_list[0].cpu().numpy())
 
-            gt_bbox_feats = reid_features[index].unsqueeze(0)
+            gt_bbox_feats = [f[index].unsqueeze(0) for f in reid_features]
             # gt_bbox_feats = results_list[0][0][index].repeat(1, 6)
             gt_bbox_feats = self.reid_head(gt_bbox_feats)
 
