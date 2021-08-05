@@ -13,9 +13,10 @@ class REIDModule(torch.nn.Module):
     def __init__(self, cfg):
         super(REIDModule, self).__init__()
         self.cfg = cfg
+        self.num = 6
         loss_evaluator = make_reid_loss_evaluator(cfg)
         self.loss_evaluator = nn.ModuleList([copy.deepcopy(loss_evaluator) for _ in range(self.num)])
-        self.num = 6
+
         fc = nn.Linear(256, 2048)
         self.share_para = False
         if self.share_para:
